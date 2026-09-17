@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Data and model artifacts are reproducible and should not live in Git.
+data/raw/*.csv
+data/processed/*.parquet
+artifacts/*
+!artifacts/home_win_lean_logistic.joblib
+!artifacts/metrics_lean_logistic.json
+!artifacts/final_holdout_corrected/
+artifacts/final_holdout_corrected/*
+!artifacts/final_holdout_corrected/holdout_metrics.json
+mlruns/

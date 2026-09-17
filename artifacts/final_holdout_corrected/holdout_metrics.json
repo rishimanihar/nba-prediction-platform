@@ -1,0 +1,43 @@
+{
+  "model": "lean_logistic",
+  "evaluated_at": "2026-09-17T18:28:15.381171+00:00",
+  "holdout_season": "2024-25",
+  "train_through_season": "2023-24",
+  "training_seasons": [
+    "2018-19",
+    "2019-20",
+    "2020-21",
+    "2021-22",
+    "2022-23",
+    "2023-24"
+  ],
+  "train_rows": 7059,
+  "holdout_rows": 1230,
+  "feature_count": 20,
+  "feature_columns": [
+    "home_win_pct_10",
+    "away_win_pct_10",
+    "home_avg_margin_10",
+    "away_avg_margin_10",
+    "home_avg_points_10",
+    "away_avg_points_10",
+    "home_avg_points_allowed_10",
+    "away_avg_points_allowed_10",
+    "home_home_win_pct_10",
+    "away_road_win_pct_10",
+    "home_rest_days",
+    "away_rest_days",
+    "home_back_to_back",
+    "away_back_to_back",
+    "home_games_last_7_days",
+    "away_games_last_7_days",
+    "home_elo",
+    "away_elo",
+    "elo_difference",
+    "elo_home_win_probability"
+  ],
+  "accuracy": 0.6699186991869919,
+  "roc_auc": 0.7280241081348968,
+  "log_loss": 0.605838434130477,
+  "brier_score": 0.2094678674212239
+}
