@@ -19,6 +19,7 @@ mlruns
 artifacts/**/*.csv
 artifacts/**/*.png
 artifacts/odds/
+artifacts/upcoming_predictions.json
 artifacts/home_win_baseline.joblib
 artifacts/home_win_enhanced_features.joblib
 artifacts/metrics.json

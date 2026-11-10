@@ -141,6 +141,8 @@ Open `http://127.0.0.1:8000/docs` to exercise the API interactively. Available e
 - `POST /predict`: returns home- and away-win probabilities for validated pregame features.
 - `POST /value`: compares those probabilities with a two-way American moneyline, removes
   the sportsbook vig, and reports model edge and estimated net return per unit staked.
+- `GET /games/upcoming`: returns today's automatically calculated matchup predictions from
+  a fresh saved schedule snapshot.
 
 The prediction request accepts the 16 independent pregame values. The service derives back-to-back flags, Elo difference, and Elo home-win probability so callers cannot submit internally inconsistent values. By default, it loads `artifacts/home_win_lean_logistic.joblib`, `artifacts/metrics_lean_logistic.json`, and the corrected final evaluation report. These paths can be overridden with `NBA_MODEL_PATH`, `NBA_MODEL_METADATA_PATH`, and `NBA_FINAL_EVALUATION_PATH`.
 
@@ -148,6 +150,32 @@ The value endpoint additionally accepts home and away moneylines from the same s
 and timestamp. Its expected-value output is a model estimate, not a guarantee or a wagering
 recommendation. Historical profitability must be evaluated on odds that were actually
 available before each game's tip-off.
+
+### Generate predictions for scheduled games
+
+Run the prediction job once each NBA game day from the repository root:
+
+```powershell
+python -m nba_predictor.predict_upcoming --season 2026-27 --history data/raw/games.csv data/raw/games_2025_26.csv
+```
+
+The job fetches one current-season NBA schedule, combines previous seasons with completed
+current-season games strictly before today in Eastern time, calculates the same rolling
+features used in training, and scores only scheduled regular-season games for today. It
+writes `artifacts/upcoming_predictions.json` with model version, generation time, matchup,
+probabilities, and predicted winner. No odds feed or API key is needed. The frozen model
+remains trained through 2024-25; 2025-26 results add pregame context but do not retrain it.
+
+Start the API and request `GET /games/upcoming`. The endpoint reads the latest snapshot on
+each request and returns HTTP 503 if it is missing, from another date, or for a different
+model artifact. On a day without scheduled games it returns an empty games list. For an
+offline replay, pass `--schedule-csv path/to/schedule.csv --date YYYY-MM-DD`; the saved
+schedule must use NBA API's `ScheduleLeagueV2` column names. The live fetch scores only
+today's Eastern date; future dates need future results that are not known yet. In Docker,
+provide the JSON
+snapshot as a read-only mount at `/app/artifacts/upcoming_predictions.json`, or set
+`NBA_UPCOMING_PREDICTIONS_PATH` to the mounted path. Refresh this file daily with a job
+scheduler when deploying the service.
 
 ## Ingest historical NBA moneylines and backtest value
 
@@ -268,4 +296,6 @@ The smoke test should pass, the container health should be `healthy` after its s
 
 ## What comes next
 
-Next, the API will be packaged with Docker and connected to a scheduled feature-generation pipeline. The frontend can then request predictions without constructing model features itself, followed by Kubernetes deployment and monitoring.
+Next, run the scheduled-game prediction job daily and mount its output into the API container.
+Then build the frontend against `GET /games/upcoming`, add prediction freshness monitoring,
+and version a retrained model after preserving the completed 2025-26 evaluation.

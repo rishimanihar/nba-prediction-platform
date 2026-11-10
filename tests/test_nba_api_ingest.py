@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from nba_predictor.data.nba_api_ingest import (
+    normalize_schedule_fixtures,
     normalize_schedule_games,
     season_label,
     validate_season_games,
@@ -53,3 +54,31 @@ def test_validate_season_games_rejects_incomplete_configured_season() -> None:
 
     with pytest.raises(ValueError, match="expected 1230"):
         validate_season_games(incomplete_games, "2024-25")
+
+
+def test_normalize_schedule_fixtures_keeps_only_scheduled_regular_games() -> None:
+    schedule = pd.DataFrame(
+        [
+            ["0022500002", "2025-10-21", 1, "BOS", "NYK"],
+            ["0022500003", "2025-10-21", 3, "MIA", "CHI"],
+            ["0062500001", "2025-10-21", 1, "LAL", "GSW"],
+            ["0022500004", "2025-10-22", 1, "DEN", "UTA"],
+        ],
+        columns=[
+            "gameId",
+            "gameDate",
+            "gameStatus",
+            "homeTeam_teamTricode",
+            "awayTeam_teamTricode",
+        ],
+    )
+    fixtures = normalize_schedule_fixtures(schedule, "2025-26", "2025-10-21")
+    assert fixtures.to_dict("records") == [
+        {
+            "game_id": "0022500002",
+            "game_date": "2025-10-21",
+            "season": "2025-26",
+            "home_team": "BOS",
+            "away_team": "NYK",
+        }
+    ]

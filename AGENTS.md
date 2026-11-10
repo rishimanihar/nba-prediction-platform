@@ -4,10 +4,11 @@ Read `README.md` before changing the pipeline. Explain each step in plain langua
 
 ## Current project
 
-- Python package under `src/nba_predictor`, with a basketball-only pregame model and FastAPI `/predict` and `/value` endpoints.
+- Python package under `src/nba_predictor`, with a basketball-only pregame model and FastAPI `/predict`, `/value`, and `/games/upcoming` endpoints.
 - The frozen production model was trained through the 2024-25 NBA season. The 2025-26 games are reserved for out-of-sample predictions and odds backtesting.
 - Historical NBA moneyline ingestion, game matching, batch checkpoints, value backtesting, and diagnostics are implemented under `src/nba_predictor/odds`.
 - OddsPapi reads its key from `ODDSPAPI_API_KEY`. Never print or commit the key. Raw CSVs and most generated artifacts are ignored by Git.
+- `nba_predictor.predict_upcoming` uses the NBA season schedule and completed history to generate today's scoreless-fixture predictions in `artifacts/upcoming_predictions.json`. The API serves only a snapshot for the current Eastern date and loaded model version.
 
 ## Current evaluation state
 

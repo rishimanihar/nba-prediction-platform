@@ -25,7 +25,9 @@ def _team_summary(
     history: list[dict[str, object]], window: int, venue: bool | None = None
 ) -> dict[str, float]:
     """Summarize only games played before the game being featurized."""
-    eligible_games = history if venue is None else [game for game in history if game["is_home"] == venue]
+    eligible_games = (
+        history if venue is None else [game for game in history if game["is_home"] == venue]
+    )
     recent = eligible_games[-window:]
     if not recent:
         return {
@@ -44,16 +46,22 @@ def _team_summary(
     }
 
 
-def _rest_days(last_game_date: dict[str, pd.Timestamp], team: str, game_date: pd.Timestamp) -> float:
+def _rest_days(
+    last_game_date: dict[str, pd.Timestamp], team: str, game_date: pd.Timestamp
+) -> float:
     previous_date = last_game_date.get(team)
     if previous_date is None:
         return 7.0
     return float(max((game_date - previous_date).days - 1, 0))
 
 
-def _games_in_last_days(history: list[dict[str, object]], game_date: pd.Timestamp, days: int) -> float:
+def _games_in_last_days(
+    history: list[dict[str, object]], game_date: pd.Timestamp, days: int
+) -> float:
     """Count earlier games in a rolling calendar window, excluding the current game."""
-    return float(sum(0 < (game_date - pd.Timestamp(game["game_date"])).days <= days for game in history))
+    return float(
+        sum(0 < (game_date - pd.Timestamp(game["game_date"])).days <= days for game in history)
+    )
 
 
 def elo_home_win_probability(home_elo: float, away_elo: float) -> float:
@@ -82,6 +90,45 @@ def build_pregame_features(games: pd.DataFrame) -> pd.DataFrame:
     Team form resets at each season boundary. Elo ratings carry forward after regressing
     toward league average, preserving long-term signal without assuming unchanged rosters.
     """
+    return _build_feature_rows(games, include_unplayed=False)
+
+
+def build_fixture_features(completed_games: pd.DataFrame, fixtures: pd.DataFrame) -> pd.DataFrame:
+    """Score scheduled matchups from strictly earlier completed games."""
+    fixture_columns = REQUIRED_COLUMNS - {"home_score", "away_score"}
+    missing_history = REQUIRED_COLUMNS - set(completed_games.columns)
+    if missing_history:
+        raise ValueError(
+            f"Completed games are missing required columns: {', '.join(sorted(missing_history))}"
+        )
+    missing = fixture_columns - set(fixtures.columns)
+    if missing:
+        raise ValueError(f"Fixtures are missing required columns: {', '.join(sorted(missing))}")
+    if fixtures.empty or completed_games.empty:
+        raise ValueError("Completed games and fixtures must both be nonempty")
+    fixture_ids = fixtures["game_id"].astype(str)
+    history_ids = completed_games["game_id"].astype(str)
+    if fixture_ids.duplicated().any() or history_ids.duplicated().any():
+        raise ValueError("Game IDs must be unique")
+    if set(fixture_ids) & set(history_ids):
+        raise ValueError("Fixtures overlap completed games")
+    fixture_dates = pd.to_datetime(fixtures["game_date"], errors="raise")
+    history_dates = pd.to_datetime(completed_games["game_date"], errors="raise")
+    if fixture_dates.isna().any() or history_dates.isna().any():
+        raise ValueError("Game dates cannot be missing")
+    if history_dates.max() >= fixture_dates.min():
+        raise ValueError("Completed games must be strictly earlier than every fixture")
+    if completed_games[["home_score", "away_score"]].isna().any().any():
+        raise ValueError("Completed history contains missing scores")
+    fixture_rows = fixtures[list(fixture_columns)].copy()
+    fixture_rows["home_score"] = pd.NA
+    fixture_rows["away_score"] = pd.NA
+    all_rows = pd.concat([completed_games, fixture_rows], ignore_index=True)
+    features = _build_feature_rows(all_rows, include_unplayed=True)
+    return features.loc[features["game_id"].isin(set(fixture_ids))].reset_index(drop=True)
+
+
+def _build_feature_rows(games: pd.DataFrame, include_unplayed: bool) -> pd.DataFrame:
     missing_columns = REQUIRED_COLUMNS - set(games.columns)
     if missing_columns:
         missing = ", ".join(sorted(missing_columns))
@@ -89,7 +136,8 @@ def build_pregame_features(games: pd.DataFrame) -> pd.DataFrame:
 
     frame = games.copy()
     frame["game_date"] = pd.to_datetime(frame["game_date"], errors="raise")
-    frame = frame.dropna(subset=["home_score", "away_score"])
+    if not include_unplayed:
+        frame = frame.dropna(subset=["home_score", "away_score"])
     frame = frame.sort_values(["game_date", "game_id"], kind="stable")
 
     team_history: dict[str, list[dict[str, object]]] = defaultdict(list)
@@ -99,11 +147,14 @@ def build_pregame_features(games: pd.DataFrame) -> pd.DataFrame:
     feature_rows: list[dict[str, object]] = []
 
     for game in frame.itertuples(index=False):
+        completed = pd.notna(game.home_score) and pd.notna(game.away_score)
         season = str(game.season)
         if active_season is not None and season != active_season:
             team_history.clear()
             last_game_date.clear()
-            elo_ratings = defaultdict(lambda: ELO_BASE_RATING, _regress_elo_for_new_season(elo_ratings))
+            elo_ratings = defaultdict(
+                lambda: ELO_BASE_RATING, _regress_elo_for_new_season(elo_ratings)
+            )
         active_season = season
 
         home = str(game.home_team)
@@ -143,17 +194,27 @@ def build_pregame_features(games: pd.DataFrame) -> pd.DataFrame:
                 "away_rest_days": away_rest_days,
                 "home_back_to_back": int(home_rest_days == 0),
                 "away_back_to_back": int(away_rest_days == 0),
-                "home_games_last_7_days": _games_in_last_days(team_history[home], game_date, days=7),
-                "away_games_last_7_days": _games_in_last_days(team_history[away], game_date, days=7),
+                "home_games_last_7_days": _games_in_last_days(
+                    team_history[home], game_date, days=7
+                ),
+                "away_games_last_7_days": _games_in_last_days(
+                    team_history[away], game_date, days=7
+                ),
                 "home_elo": home_elo,
                 "away_elo": away_elo,
                 "elo_difference": home_elo - away_elo,
                 "elo_home_win_probability": elo_home_win_probability(home_elo, away_elo),
-                "home_win": int(float(game.home_score) > float(game.away_score)),
-                "home_point_diff": float(game.home_score) - float(game.away_score),
+                "home_win": int(float(game.home_score) > float(game.away_score))
+                if completed
+                else None,
+                "home_point_diff": (
+                    float(game.home_score) - float(game.away_score) if completed else None
+                ),
             }
         )
 
+        if not completed:
+            continue
         home_margin = float(game.home_score) - float(game.away_score)
         home_won = home_margin > 0
         home_points = float(game.home_score)

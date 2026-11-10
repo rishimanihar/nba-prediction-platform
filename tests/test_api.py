@@ -1,5 +1,7 @@
 import json
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import joblib
 import pandas as pd
@@ -134,3 +136,41 @@ def test_api_compares_model_probability_with_a_two_way_moneyline(tmp_path: Path)
     ] == pytest.approx(1.0)
     assert result["home_model_edge"] + result["away_model_edge"] == pytest.approx(0.0)
     assert result["bookmaker"] == "Example Sportsbook"
+
+
+def test_api_serves_fresh_scheduled_predictions_and_rejects_stale_file(tmp_path: Path) -> None:
+    paths = _write_test_artifacts(tmp_path)
+    upcoming_path = tmp_path / "upcoming.json"
+    today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+    snapshot = {
+        "as_of_date": today,
+        "generated_at": datetime.now(ZoneInfo("America/New_York")).isoformat(),
+        "model_name": "test_lean_logistic",
+        "model_trained_at": "2026-09-17T00:00:00+00:00",
+        "games": [
+            {
+                "game_id": "0022600001",
+                "game_date": today,
+                "season": "2026-27",
+                "home_team": "BOS",
+                "away_team": "NYK",
+                "home_win_probability": 0.6,
+                "away_win_probability": 0.4,
+                "predicted_winner": "BOS",
+            }
+        ],
+    }
+    app = create_app(*paths, upcoming_path=upcoming_path)
+    with TestClient(app) as client:
+        assert client.get("/games/upcoming").status_code == 503
+        upcoming_path.write_text(json.dumps(snapshot), encoding="utf-8")
+        response = client.get("/games/upcoming")
+        assert response.status_code == 200
+        assert response.json()["games"][0]["game_id"] == "0022600001"
+        snapshot["as_of_date"] = "2025-10-21"
+        upcoming_path.write_text(json.dumps(snapshot), encoding="utf-8")
+        assert client.get("/games/upcoming").status_code == 503
+        snapshot["as_of_date"] = today
+        snapshot["games"][0]["away_win_probability"] = 0.6
+        upcoming_path.write_text(json.dumps(snapshot), encoding="utf-8")
+        assert client.get("/games/upcoming").status_code == 503

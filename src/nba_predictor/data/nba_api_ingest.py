@@ -26,6 +26,7 @@ NORMALIZED_COLUMNS = [
     "home_score",
     "away_score",
 ]
+FIXTURE_COLUMNS = ["game_id", "game_date", "season", "home_team", "away_team"]
 EXPECTED_SEASON_GAME_COUNTS = {
     "2018-19": 1_230,
     "2019-20": 1_059,
@@ -64,19 +65,55 @@ def normalize_schedule_games(schedule_games: pd.DataFrame, season: str) -> pd.Da
         completed_regular_season["gameDate"]
     ).dt.date.astype(str)
     completed_regular_season["season"] = season
-    completed_regular_season["home_team"] = completed_regular_season[
-        "homeTeam_teamTricode"
-    ].astype(str)
-    completed_regular_season["away_team"] = completed_regular_season[
-        "awayTeam_teamTricode"
-    ].astype(str)
-    completed_regular_season["home_score"] = home_scores.loc[
-        completed_regular_season.index
-    ].astype(int)
-    completed_regular_season["away_score"] = away_scores.loc[
-        completed_regular_season.index
-    ].astype(int)
+    completed_regular_season["home_team"] = completed_regular_season["homeTeam_teamTricode"].astype(
+        str
+    )
+    completed_regular_season["away_team"] = completed_regular_season["awayTeam_teamTricode"].astype(
+        str
+    )
+    completed_regular_season["home_score"] = home_scores.loc[completed_regular_season.index].astype(
+        int
+    )
+    completed_regular_season["away_score"] = away_scores.loc[completed_regular_season.index].astype(
+        int
+    )
     return completed_regular_season[NORMALIZED_COLUMNS].reset_index(drop=True)
+
+
+def normalize_schedule_fixtures(
+    schedule_games: pd.DataFrame, season: str, game_date: str
+) -> pd.DataFrame:
+    """Keep scheduled regular-season games on one NBA calendar date."""
+    required = SCHEDULE_COLUMNS - {"homeTeam_score", "awayTeam_score"}
+    missing = required - set(schedule_games.columns)
+    if missing:
+        raise ValueError(
+            f"NBA API response is missing expected columns: {', '.join(sorted(missing))}"
+        )
+    dates = pd.to_datetime(schedule_games["gameDate"], errors="raise").dt.date.astype(str)
+    ids = schedule_games["gameId"].astype(str).str.zfill(10)
+    status = pd.to_numeric(schedule_games["gameStatus"], errors="coerce")
+    fixtures = schedule_games.loc[
+        ids.str.startswith("002") & status.eq(1) & dates.eq(game_date)
+    ].copy()
+    fixtures["game_id"] = ids.loc[fixtures.index]
+    fixtures["game_date"] = dates.loc[fixtures.index]
+    fixtures["season"] = season
+    fixtures["home_team"] = fixtures["homeTeam_teamTricode"].astype(str)
+    fixtures["away_team"] = fixtures["awayTeam_teamTricode"].astype(str)
+    if fixtures["game_id"].duplicated().any():
+        raise ValueError("Schedule contains duplicate fixture IDs")
+    if fixtures["home_team"].eq(fixtures["away_team"]).any():
+        raise ValueError("A scheduled game has the same home and away team")
+    if (
+        not fixtures["home_team"].str.fullmatch(r"[A-Z]{2,4}").all()
+        or not fixtures["away_team"].str.fullmatch(r"[A-Z]{2,4}").all()
+    ):
+        raise ValueError("Scheduled games contain invalid team codes")
+    appearances = pd.concat([fixtures["home_team"], fixtures["away_team"]])
+    if appearances.duplicated().any():
+        raise ValueError("A team has multiple scheduled games on one date")
+    return fixtures[FIXTURE_COLUMNS].sort_values("game_id", kind="stable").reset_index(drop=True)
 
 
 def validate_season_games(games: pd.DataFrame, season: str) -> None:
@@ -134,7 +171,9 @@ def ingest_seasons(start_year: int, end_year: int, output_path: Path) -> pd.Data
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--start-season", type=int, required=True, help="First season's start year.")
+    parser.add_argument(
+        "--start-season", type=int, required=True, help="First season's start year."
+    )
     parser.add_argument("--end-season", type=int, required=True, help="Last season's start year.")
     parser.add_argument("--output", type=Path, default=Path("data/raw/games.csv"))
     args = parser.parse_args()

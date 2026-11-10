@@ -6,17 +6,21 @@ import json
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import joblib
 import pandas as pd
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
+from pydantic import ValidationError
 
 from nba_predictor.api.schemas import (
     HealthResponse,
     ModelInfoResponse,
     PredictionRequest,
     PredictionResponse,
+    UpcomingGamesResponse,
     ValueRequest,
     ValueResponse,
 )
@@ -27,6 +31,7 @@ from nba_predictor.odds.value import expected_value_per_unit, remove_two_way_vig
 DEFAULT_MODEL_PATH = Path("artifacts/home_win_lean_logistic.joblib")
 DEFAULT_METADATA_PATH = Path("artifacts/metrics_lean_logistic.json")
 DEFAULT_FINAL_EVALUATION_PATH = Path("artifacts/final_holdout_corrected/holdout_metrics.json")
+DEFAULT_UPCOMING_PATH = Path("artifacts/upcoming_predictions.json")
 
 
 def _read_json(path: Path) -> dict[str, object]:
@@ -43,7 +48,9 @@ def _validate_artifacts(metadata: dict[str, object], final_evaluation: dict[str,
     if metadata.get("feature_columns") != LEAN_LOGISTIC_FEATURE_COLUMNS:
         raise RuntimeError("Model metadata does not match the approved lean feature set.")
     if final_evaluation.get("feature_columns") != LEAN_LOGISTIC_FEATURE_COLUMNS:
-        raise RuntimeError("Final evaluation metadata does not match the approved lean feature set.")
+        raise RuntimeError(
+            "Final evaluation metadata does not match the approved lean feature set."
+        )
 
 
 def _feature_frame(payload: PredictionRequest) -> pd.DataFrame:
@@ -72,6 +79,7 @@ def create_app(
     model_path: Path | None = None,
     metadata_path: Path | None = None,
     final_evaluation_path: Path | None = None,
+    upcoming_path: Path | None = None,
 ) -> FastAPI:
     resolved_model_path = model_path or Path(os.getenv("NBA_MODEL_PATH", DEFAULT_MODEL_PATH))
     resolved_metadata_path = metadata_path or Path(
@@ -79,6 +87,9 @@ def create_app(
     )
     resolved_final_evaluation_path = final_evaluation_path or Path(
         os.getenv("NBA_FINAL_EVALUATION_PATH", DEFAULT_FINAL_EVALUATION_PATH)
+    )
+    resolved_upcoming_path = upcoming_path or Path(
+        os.getenv("NBA_UPCOMING_PREDICTIONS_PATH", DEFAULT_UPCOMING_PATH)
     )
 
     @asynccontextmanager
@@ -137,6 +148,30 @@ def create_app(
             model_name=str(metadata["model"]),
             model_trained_at=str(metadata["trained_at"]),
         )
+
+    @application.get("/games/upcoming", response_model=UpcomingGamesResponse)
+    def upcoming_games(request: Request) -> UpcomingGamesResponse:
+        if not resolved_upcoming_path.exists():
+            raise HTTPException(
+                status_code=503, detail="Upcoming predictions have not been generated"
+            )
+        try:
+            snapshot = UpcomingGamesResponse.model_validate_json(
+                resolved_upcoming_path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValidationError, ValueError) as exc:
+            raise HTTPException(
+                status_code=503, detail="Upcoming prediction file is invalid"
+            ) from exc
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+        metadata = request.app.state.metadata
+        if (
+            snapshot.as_of_date != today
+            or snapshot.model_name != metadata["model"]
+            or snapshot.model_trained_at != metadata["trained_at"]
+        ):
+            raise HTTPException(status_code=503, detail="Upcoming predictions are stale")
+        return snapshot
 
     @application.post("/value", response_model=ValueResponse)
     def value(payload: ValueRequest, request: Request) -> ValueResponse:

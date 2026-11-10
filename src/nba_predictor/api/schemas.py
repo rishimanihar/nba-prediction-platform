@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -47,6 +47,42 @@ class PredictionResponse(BaseModel):
     predicted_winner: str
     model_name: str
     model_trained_at: str
+
+
+class UpcomingGamePrediction(BaseModel):
+    game_id: str
+    game_date: date
+    season: str
+    home_team: str
+    away_team: str
+    home_win_probability: float = Field(ge=0.0, le=1.0)
+    away_win_probability: float = Field(ge=0.0, le=1.0)
+    predicted_winner: str
+
+    @model_validator(mode="after")
+    def probabilities_and_winner_must_agree(self) -> Self:
+        if abs(self.home_win_probability + self.away_win_probability - 1.0) > 1e-6:
+            raise ValueError("home and away probabilities must sum to one")
+        expected = self.home_team if self.home_win_probability >= 0.5 else self.away_team
+        if self.predicted_winner != expected:
+            raise ValueError("predicted winner must match the probabilities")
+        return self
+
+
+class UpcomingGamesResponse(BaseModel):
+    as_of_date: date
+    generated_at: datetime
+    model_name: str
+    model_trained_at: str
+    games: list[UpcomingGamePrediction]
+
+    @model_validator(mode="after")
+    def game_dates_must_match_snapshot(self) -> Self:
+        if self.generated_at.tzinfo is None:
+            raise ValueError("generation time needs a timezone")
+        if any(game.game_date != self.as_of_date for game in self.games):
+            raise ValueError("game dates must match the snapshot date")
+        return self
 
 
 class ValueRequest(PredictionRequest):
