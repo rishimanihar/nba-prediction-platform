@@ -113,3 +113,24 @@ def test_api_rejects_the_same_home_and_away_team(tmp_path: Path) -> None:
         response = client.post("/predict", json=payload)
 
     assert response.status_code == 422
+
+
+def test_api_compares_model_probability_with_a_two_way_moneyline(tmp_path: Path) -> None:
+    paths = _write_test_artifacts(tmp_path)
+    application = create_app(*paths)
+    payload = _prediction_payload() | {
+        "home_moneyline": -120,
+        "away_moneyline": 110,
+        "bookmaker": "Example Sportsbook",
+    }
+
+    with TestClient(application) as client:
+        response = client.post("/value", json=payload)
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["home_market_fair_probability"] + result[
+        "away_market_fair_probability"
+    ] == pytest.approx(1.0)
+    assert result["home_model_edge"] + result["away_model_edge"] == pytest.approx(0.0)
+    assert result["bookmaker"] == "Example Sportsbook"

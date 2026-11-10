@@ -139,8 +139,108 @@ Open `http://127.0.0.1:8000/docs` to exercise the API interactively. Available e
 - `GET /health`: confirms that the service and model loaded successfully.
 - `GET /model`: reports training data, feature version, and final holdout evidence.
 - `POST /predict`: returns home- and away-win probabilities for validated pregame features.
+- `POST /value`: compares those probabilities with a two-way American moneyline, removes
+  the sportsbook vig, and reports model edge and estimated net return per unit staked.
 
 The prediction request accepts the 16 independent pregame values. The service derives back-to-back flags, Elo difference, and Elo home-win probability so callers cannot submit internally inconsistent values. By default, it loads `artifacts/home_win_lean_logistic.joblib`, `artifacts/metrics_lean_logistic.json`, and the corrected final evaluation report. These paths can be overridden with `NBA_MODEL_PATH`, `NBA_MODEL_METADATA_PATH`, and `NBA_FINAL_EVALUATION_PATH`.
+
+The value endpoint additionally accepts home and away moneylines from the same sportsbook
+and timestamp. Its expected-value output is a model estimate, not a guarantee or a wagering
+recommendation. Historical profitability must be evaluated on odds that were actually
+available before each game's tip-off.
+
+## Ingest historical NBA moneylines and backtest value
+
+### Free OddsPapi route
+
+Create a free [OddsPapi account](https://oddspapi.io/us/sign-up) and copy its key from account settings. In PowerShell, run these commands in the project directory and keep the terminal open:
+
+```powershell
+$secure = Read-Host "Paste OddsPapi key" -AsSecureString
+$env:ODDSPAPI_API_KEY = [System.Net.NetworkCredential]::new("", $secure).Password
+python -m nba_predictor.odds.oddspapi --check-key
+```
+
+The check calls the unmetered account endpoint and prints only whether the key was accepted. It does not store the key in a file. OddsPapi's free historical archive begins in January 2026, so use 2025-26 or newer NBA games for matching; the existing `data/raw/games.csv` ends at 2024-25. Once a matching games CSV is available, ingest a UTC fixture day:
+
+```powershell
+python -m nba_predictor.odds.oddspapi --date 2026-02-01 --games data/raw/games_2025_26.csv --bookmakers fanduel,draftkings,pinnacle
+```
+
+This writes `data/raw/oddspapi_moneylines.csv` and an `_unmatched.csv` file. OddsPapi provides decimal prices and timestamped line moves; the importer reconstructs active two-way market `111` quotes before tip, preserves the exact decimal prices, and includes approximate American equivalents. The backtest uses the exact decimal prices when present. The historical endpoint permits up to three bookmaker slugs per request and has a five-second cooldown. Fixture discovery uses a request from the free monthly allowance.
+
+Collect a range of UTC fixture dates with daily checkpoints. This example includes the already collected January 16 file without fetching it again:
+
+```powershell
+python -m nba_predictor.odds.oddspapi_batch --start-date 2026-01-17 --end-date 2026-01-23 --games data/raw/games_2025_26.csv --bookmakers fanduel --include data/raw/oddspapi_2026-01-16.csv
+```
+
+The batch job writes one matched and one unmatched CSV per date under `data/raw/oddspapi_days/`, then writes `data/raw/oddspapi_combined.csv`. Rerunning the same command skips completed dates. A manifest prevents reuse of saved daily data with a different bookmaker list or games path. If an API request fails, rerun the command to continue from the last complete day. The seven-day example can take several minutes because the historical endpoint has a five-second cooldown per fixture.
+If OddsPapi returns `404 NOT_FOUND` for one fixture's historical odds, ingestion records its ID and teams in that day's `_missing_history.csv` and continues. Inspect those files when reviewing coverage; a missing archive is not a matched quote. Other HTTP errors still stop the batch for investigation.
+If the fixtures endpoint returns `404 FIXTURE_NOT_FOUND` for a date without NBA games, the
+batch saves empty daily files and continues to the next date.
+The importer waits between empty fixture days and retries temporary `429 RATE_LIMITED`
+responses using the provider's wait time. A `REQUEST_LIMIT_EXCEEDED` quota error still stops
+the batch; saved daily files allow a later resume.
+The range filters OddsPapi fixtures by UTC date; an NBA game on a US evening may be on the next UTC date. Query boundary dates on both sides of the desired US calendar window and let the batch job remove repeated quotes. Quotes for postponed games remain unmatched when the listed tip date does not correspond to a completed NBA game; do not attach them to the later rescheduled result.
+
+To backtest against the 2025-26 season, score it with the frozen model trained through 2024-25, then join the quotes at a fixed pre-tip lead time:
+
+```powershell
+python -m nba_predictor.odds.predict_history --target-games data/raw/games_2025_26.csv --output artifacts/odds/predictions_2025_26.csv
+python -m nba_predictor.odds.backtest --quotes data/raw/oddspapi_2026-01-16.csv --predictions artifacts/odds/predictions_2025_26.csv --output artifacts/odds/value_backtest_2026-01-16.csv --hours-before-tip 1
+```
+
+The prediction command checks that the target season was excluded from training and that each team has at most one game per calendar date. A single day's betting return is only a pipeline check; use many dates and review coverage before drawing conclusions about profitability.
+
+After running the value backtest, save a reproducible calibration and selection report:
+
+```powershell
+python -m nba_predictor.odds.diagnostics --backtest artifacts/odds/value_backtest_2026-01-16_to_31.csv --output-dir artifacts/odds/diagnostics_2026_01
+```
+
+The report contains model and no-vig market Brier scores and log losses, five fixed probability bins, and four fixed estimated-value bins. These bins describe the held-out results; do not choose new betting thresholds from the same games and present their performance as an independent test.
+
+### Compare game predictions with the market
+
+The main project goal is predicting NBA winners. Score the frozen model on every completed
+2025-26 game, then compare it with FanDuel only where an eligible pregame quote exists:
+
+```powershell
+python -m nba_predictor.evaluation.outcome_comparison --games data/raw/games_2025_26.csv --predictions artifacts/odds/predictions_2025_26.csv --backtest artifacts/odds/value_backtest_through_2026-03-01.csv --hours-before-tip 1 --output artifacts/odds/outcome_comparison_2025_26.json
+```
+
+The JSON report gives accuracy, ROC AUC, Brier score, and log loss for the model on the full
+season and for both the model and the no-vig bookmaker on exactly the same priced games.
+Lower Brier score and log loss are better; higher accuracy and ROC AUC are better. The
+report checks game identities, outcomes, model probabilities, and quote times before scoring.
+It also gives a 95% paired bootstrap interval for the market's advantage on each metric.
+Positive advantage means the market performed better; an interval crossing zero means the
+sample does not clearly distinguish the two. The bootstrap resamples whole game dates,
+keeping games from the same date together. Use `--bootstrap-resamples` and `--bootstrap-seed`
+to control the reproducible calculation.
+The odds-covered sample is smaller and drawn from a specific date range, so its scores
+should not be treated as the model's full-season performance. Running this command uses
+saved local files and makes no odds API requests.
+
+### The Odds API route
+
+The historical odds job uses [The Odds API's historical NBA endpoint](https://the-odds-api.com/liveapi/guides/v4/), which requires a plan with historical access. It requests `basketball_nba`, the `h2h` market, and American odds at explicit UTC snapshot times. The provider returns the closest snapshot at or before the requested time. A key is read from `ODDS_API_KEY` and is never written to the output.
+
+```powershell
+$env:ODDS_API_KEY = "your-key"
+python -m nba_predictor.odds.historical --snapshot 2024-10-22T20:00:00Z --snapshot 2024-10-23T00:00:00Z
+```
+
+The command writes `data/raw/historical_moneylines.csv` and a companion `_unmatched.csv`. Each matched row contains the NBA game ID, provider event ID, actual snapshot time, market update time, scheduled tip time, both team codes, bookmaker, and both prices. It accepts only complete two-way quotes with both timestamps before the provider's tip time. Matching uses the provider's tip date in Eastern time plus the exact home and away teams; zero or multiple NBA game matches go to the unmatched file. Review unmatched rows before using the data. The existing `games.csv` does not have an authoritative tip timestamp, so the provider's scheduled tip is the time boundary; a corrected tip time from an NBA schedule feed would strengthen this check.
+
+Backtest with **out-of-sample** predictions, for example the existing final holdout predictions:
+
+```powershell
+python -m nba_predictor.odds.backtest --predictions artifacts/final_holdout_corrected/holdout_predictions.csv --hours-before-tip 1
+```
+
+This saves `artifacts/odds/value_backtest.csv`. It selects the latest eligible snapshot per game and bookmaker, uses the model's probability and the offered price to choose a positive expected-value side, and records realized net return for a one-unit stake. ROI in the command output is net return divided by the number of bets. Coverage depends on the paid feed, chosen snapshots, and the prediction season. Do not use predictions from a model trained on the same games as an historical profitability estimate.
 
 ## Run the API with Docker
 

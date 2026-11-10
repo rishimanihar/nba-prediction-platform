@@ -1,8 +1,11 @@
 .git
 .gitignore
 .pytest_cache
-.ruff_cache
+.ruff_cache/
 .venv
+.python311/
+.env
+.env.*
 **/__pycache__
 **/*.py[cod]
 .coverage
@@ -15,6 +18,7 @@ tests
 mlruns
 artifacts/**/*.csv
 artifacts/**/*.png
+artifacts/odds/
 artifacts/home_win_baseline.joblib
 artifacts/home_win_enhanced_features.joblib
 artifacts/metrics.json

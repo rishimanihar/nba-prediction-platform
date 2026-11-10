@@ -17,9 +17,12 @@ from nba_predictor.api.schemas import (
     ModelInfoResponse,
     PredictionRequest,
     PredictionResponse,
+    ValueRequest,
+    ValueResponse,
 )
 from nba_predictor.features.team_form import elo_home_win_probability
 from nba_predictor.models.feature_sets import LEAN_LOGISTIC_FEATURE_COLUMNS
+from nba_predictor.odds.value import expected_value_per_unit, remove_two_way_vig
 
 DEFAULT_MODEL_PATH = Path("artifacts/home_win_lean_logistic.joblib")
 DEFAULT_METADATA_PATH = Path("artifacts/metrics_lean_logistic.json")
@@ -44,7 +47,14 @@ def _validate_artifacts(metadata: dict[str, object], final_evaluation: dict[str,
 
 
 def _feature_frame(payload: PredictionRequest) -> pd.DataFrame:
-    values = payload.model_dump(exclude={"home_team", "away_team", "game_date"})
+    derived_columns = {
+        "home_back_to_back",
+        "away_back_to_back",
+        "elo_difference",
+        "elo_home_win_probability",
+    }
+    independent_columns = set(LEAN_LOGISTIC_FEATURE_COLUMNS) - derived_columns
+    values = payload.model_dump(include=independent_columns)
     values["home_back_to_back"] = int(payload.home_rest_days == 0)
     values["away_back_to_back"] = int(payload.away_rest_days == 0)
     values["elo_difference"] = payload.home_elo - payload.away_elo
@@ -52,6 +62,10 @@ def _feature_frame(payload: PredictionRequest) -> pd.DataFrame:
         payload.home_elo, payload.away_elo
     )
     return pd.DataFrame([values], columns=LEAN_LOGISTIC_FEATURE_COLUMNS)
+
+
+def _home_win_probability(payload: PredictionRequest, request: Request) -> float:
+    return float(request.app.state.model.predict_proba(_feature_frame(payload))[0, 1])
 
 
 def create_app(
@@ -111,9 +125,7 @@ def create_app(
 
     @application.post("/predict", response_model=PredictionResponse)
     def predict(payload: PredictionRequest, request: Request) -> PredictionResponse:
-        probability = float(
-            request.app.state.model.predict_proba(_feature_frame(payload))[0, 1]
-        )
+        probability = _home_win_probability(payload, request)
         metadata = request.app.state.metadata
         return PredictionResponse(
             home_team=payload.home_team,
@@ -122,6 +134,40 @@ def create_app(
             home_win_probability=probability,
             away_win_probability=1.0 - probability,
             predicted_winner=payload.home_team if probability >= 0.5 else payload.away_team,
+            model_name=str(metadata["model"]),
+            model_trained_at=str(metadata["trained_at"]),
+        )
+
+    @application.post("/value", response_model=ValueResponse)
+    def value(payload: ValueRequest, request: Request) -> ValueResponse:
+        home_probability = _home_win_probability(payload, request)
+        away_probability = 1.0 - home_probability
+        market = remove_two_way_vig(payload.home_moneyline, payload.away_moneyline)
+        home_ev = expected_value_per_unit(home_probability, payload.home_moneyline)
+        away_ev = expected_value_per_unit(away_probability, payload.away_moneyline)
+        higher_estimated_value_side: str | None = None
+        if max(home_ev, away_ev) > 0.0:
+            higher_estimated_value_side = (
+                payload.home_team if home_ev >= away_ev else payload.away_team
+            )
+        metadata = request.app.state.metadata
+        return ValueResponse(
+            home_team=payload.home_team,
+            away_team=payload.away_team,
+            game_date=payload.game_date,
+            bookmaker=payload.bookmaker,
+            home_moneyline=payload.home_moneyline,
+            away_moneyline=payload.away_moneyline,
+            sportsbook_overround=market.overround,
+            home_model_probability=home_probability,
+            away_model_probability=away_probability,
+            home_market_fair_probability=market.home_fair_probability,
+            away_market_fair_probability=market.away_fair_probability,
+            home_model_edge=home_probability - market.home_fair_probability,
+            away_model_edge=away_probability - market.away_fair_probability,
+            home_expected_value_per_unit=home_ev,
+            away_expected_value_per_unit=away_ev,
+            higher_estimated_value_side=higher_estimated_value_side,
             model_name=str(metadata["model"]),
             model_trained_at=str(metadata["trained_at"]),
         )

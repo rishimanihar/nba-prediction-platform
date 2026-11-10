@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
+.python311/
 .env
 .pytest_cache/
 .ruff_cache/
@@ -12,6 +13,7 @@ dist/
 
 # Data and model artifacts are reproducible and should not live in Git.
 data/raw/*.csv
+data/raw/oddspapi_days/
 data/processed/*.parquet
 artifacts/*
 !artifacts/home_win_lean_logistic.joblib
