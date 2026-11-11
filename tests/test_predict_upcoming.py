@@ -1,13 +1,15 @@
 """Upcoming predictions use only completed games before the scoring date."""
 
+import json
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from nba_predictor.models.feature_sets import LEAN_LOGISTIC_FEATURE_COLUMNS
-from nba_predictor.predict_upcoming import generate_predictions
+from nba_predictor.predict_upcoming import generate_predictions, write_snapshot
 
 
 class FixedModel:
@@ -103,3 +105,13 @@ def test_empty_schedule_is_an_error_instead_of_an_off_day() -> None:
         generate_predictions(
             history, schedule.iloc[:0], "2025-26", date(2025, 10, 21), FixedModel(), metadata
         )
+
+
+def test_snapshot_write_preserves_previous_file_when_serialization_fails(tmp_path: Path) -> None:
+    output = tmp_path / "upcoming.json"
+    write_snapshot({"games": ["first"]}, output)
+    assert json.loads(output.read_text(encoding="utf-8")) == {"games": ["first"]}
+    with pytest.raises(TypeError):
+        write_snapshot({"games": {"not JSON serializable"}}, output)
+    assert json.loads(output.read_text(encoding="utf-8")) == {"games": ["first"]}
+    assert list(tmp_path.glob("*.tmp")) == []

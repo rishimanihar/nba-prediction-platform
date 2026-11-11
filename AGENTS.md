@@ -9,6 +9,7 @@ Read `README.md` before changing the pipeline. Explain each step in plain langua
 - Historical NBA moneyline ingestion, game matching, batch checkpoints, value backtesting, and diagnostics are implemented under `src/nba_predictor/odds`.
 - OddsPapi reads its key from `ODDSPAPI_API_KEY`. Never print or commit the key. Raw CSVs and most generated artifacts are ignored by Git.
 - `nba_predictor.predict_upcoming` uses the NBA season schedule and completed history to generate today's scoreless-fixture predictions in `artifacts/upcoming_predictions.json`. The API serves only a snapshot for the current Eastern date and loaded model version.
+- `scripts/run_daily_predictions.ps1` refreshes the snapshot with retries and a dated log. `scripts/install_daily_predictions_task.ps1` registers a 9:00 AM local Windows task; run that installer from the owner's PowerShell session, never from the Codex sandbox account.
 
 ## Current evaluation state
 

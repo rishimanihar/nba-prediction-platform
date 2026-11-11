@@ -177,6 +177,31 @@ snapshot as a read-only mount at `/app/artifacts/upcoming_predictions.json`, or 
 `NBA_UPCOMING_PREDICTIONS_PATH` to the mounted path. Refresh this file daily with a job
 scheduler when deploying the service.
 
+### Refresh predictions every morning on Windows
+
+Install a local Windows Scheduled Task once from your regular PowerShell terminal:
+
+```powershell
+powershell.exe -NoProfile -File .\scripts\install_daily_predictions_task.ps1 -WhatIf
+powershell.exe -NoProfile -File .\scripts\install_daily_predictions_task.ps1 -RunNow
+```
+
+The first command previews the task. The second registers `NBA Predictor Daily Predictions`
+and starts one refresh immediately; that first run may take several minutes. The task runs
+at **9:00 AM in your computer's local time zone**. It runs as your signed-in Windows user,
+requires a network connection, and starts after a missed run when the computer becomes
+available. The runner tries the NBA schedule request up to three times, then writes each
+attempt to `artifacts/logs/upcoming_YYYY-MM-DD.log`. A failed refresh leaves the last
+complete JSON file in place; the API rejects that file once its date is stale. The job
+does not call an odds service or require an API key.
+
+The task uses the current `2026-27` season and the two historical files named above.
+Update `scripts/run_daily_predictions.ps1` when a new NBA season starts and its prior
+season games file has been saved. This local task runs only while you are signed in and
+the computer is on. A deployed API will need its own scheduled job and a shared or mounted
+snapshot file. To inspect or remove the local task, open Windows Task Scheduler and search
+for `NBA Predictor Daily Predictions`.
+
 ## Ingest historical NBA moneylines and backtest value
 
 ### Free OddsPapi route

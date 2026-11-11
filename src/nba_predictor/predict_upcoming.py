@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import tempfile
 from datetime import UTC, date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -111,6 +113,28 @@ def generate_predictions(
     }
 
 
+def write_snapshot(snapshot: dict, output: Path) -> None:
+    """Replace the published snapshot only after the new JSON is complete."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=output.parent,
+            prefix=f".{output.stem}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            json.dump(snapshot, temporary, indent=2)
+            temporary.write("\n")
+        os.replace(temporary_path, output)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--season", required=True, help="Season label, such as 2026-27")
@@ -148,8 +172,7 @@ def main() -> None:
         joblib.load(args.model),
         json.loads(args.metadata.read_text(encoding="utf-8")),
     )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+    write_snapshot(snapshot, args.output)
     print(f"Saved {len(snapshot['games'])} scheduled-game predictions to {args.output}")
 
 
